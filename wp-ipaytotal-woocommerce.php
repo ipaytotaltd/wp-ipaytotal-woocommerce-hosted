@@ -1,27 +1,27 @@
-<?php 
+<?php
 /**
-* @since 1.4.0
+* @since 1.4.1
 * @package wp-ipaytotal-woocommerce
 * @author iPayTotal Ltd
-* 
+*
 * Plugin Name: iPayTotal - WooCommerce Payment Gateway
 * Plugin URI: https://ipaytotal.com/contact
 * Description: WooCommerce custom payment gateway integration with iPayTotal.
-* Version: 1.4.0
+* Version: 1.4.1
 * Author: iPayTotal
 * Author URI: https://ipaytotal.com/ipaytotal-high-risk-merchant-account/
 * License: GNU General Public License v2 or later
 * License URI: http://www.gnu.org/licenses/gpl-2.0.html
 * Text Domain: wp-ipaytotal-woocommerce
 * Domain Path: /languages/
-* WC requires at least: 3.0.0 
-* WC tested up to: 4.9.8 
+* WC requires at least: 3.0.0
+* WC tested up to: 4.9.8
 */
- 
+
 require 'ipaytotal/plugin-update-checker.php';
 
 $MyUpdateChecker = Puc_v4_Factory::buildUpdateChecker(
-    'http://ipaytotalwp.inanceorganix.com/plugin_update/index.php?action=get_metadata&slug=wp-ipaytotal-woocommerce-master', 
+    'http://ipaytotalwp.inanceorganix.com/plugin_update/index.php?action=get_metadata&slug=wp-ipaytotal-woocommerce-master',
     __FILE__, //Full path to the main plugin file.
     'wp-ipaytotal-woocommerce-master' //Plugin slug. Usually it's the same as the name of the directory.
 );
@@ -99,15 +99,15 @@ class IpaymentTotalCallback extends WC_Payment_Gateway {
     	$valid_actions = array('sulte_apt_no');
 
 		if( isset($wp->query_vars['sulte_apt_no']) && !empty($wp->query_vars['sulte_apt_no']) ) {
-			
+
 			$orderId = $wp->query_vars['sulte_apt_no'];
 			$status = $wp->query_vars['status'];
 			$message = isset($wp->query_vars['reason']) ? $wp->query_vars['reason'] : '';
 			if( empty($message) ){
 				$message = isset( $wp->query_vars['message'] ) ? $wp->query_vars['message'] : "";
 			}
-			
-			if( $status == "success" ){				
+
+			if( $status == "success" ){
 				global $woocommerce;
 
 				// we need it to get any order detailes
@@ -122,7 +122,7 @@ class IpaymentTotalCallback extends WC_Payment_Gateway {
 				$order_url = $this->get_return_url( $order );
 				wp_redirect($order_url);
 				exit;
-				
+
 			} else {
 				global $woocommerce;
 				$order = wc_get_order( $orderId );
@@ -135,4 +135,49 @@ class IpaymentTotalCallback extends WC_Payment_Gateway {
 			}
 		}
     }
+}
+
+//added by omick
+//August 12, 2020
+add_action('init', 'register_shortcodes');
+function register_shortcodes(){
+   add_shortcode('ipaytotal-webhook', 'ipaytotal_webhook_function');
+}
+
+function ipaytotal_webhook_function() {
+  if($json = json_decode(file_get_contents("php://input"), true)) {
+    $data = $json;
+  } else {
+    $data = $_POST;
+  }
+  if (isset($data['sulte_apt_no'])) {
+    try {
+      $order_id = $data['sulte_apt_no'];
+      $customer_order = new WC_Order($order_id);
+      $is_test = $data['test'] == '1' ? "Test transaction" : "Live transaction";
+      $ipay_id = 'iPay Order ID:' . $data['order_id'];
+      $transaction_id = 'Transaction ID: ' . $data['sulte_apt_no'];
+      $status = 'Status: ' . $data['transaction_status'];
+      $reason = 'Reason: '.$data['reason'];
+      $amount = 'Amount: ' . $data['currency'] . ' ' . $data['amount'];
+      $transaction_date = 'Date: ' . $data['transaction_date'];
+
+      $final_status = $data['transaction_status'] == 'success' ? 'completed' : 'failed';
+      $note = $is_test . "\n" . $ipay_id . "\n" . $transaction_id . "\n" . $status .
+      "\n" . $reason . "\n" . $amount . "\n" . $transaction_date;
+       $result = $customer_order->update_status($final_status, $note);
+       $fp = fopen('transactions.txt', 'w');
+       fwrite($fp, print_r($data, true));
+       fclose($fp);
+    } catch(Exception $e) {
+      $fp = fopen('transactions.txt', 'w');
+      fwrite($fp, print_r($data, true));
+      fclose($fp);
+    }
+  } else {
+    $fp = fopen('transactions.txt', 'w');
+    fwrite($fp, print_r($data, true));
+    fclose($fp);
+  }
+
 }

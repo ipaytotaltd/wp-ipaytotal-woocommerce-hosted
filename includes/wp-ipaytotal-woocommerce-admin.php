@@ -26,7 +26,7 @@ class wowp_iptwpg_ipaytotal extends WC_Payment_Gateway {
 
 		// load time variable setting
 		$this->init_settings();
-		
+
 		// Turn these settings into variables we can use
 		foreach ( $this->settings as $setting_key => $value ) {
 			$this->$setting_key = $value;
@@ -36,7 +36,7 @@ class wowp_iptwpg_ipaytotal extends WC_Payment_Gateway {
 		$this->method_title = __( $this->title, 'wp-ipaytotal-woocommerce' );
 
 		$this->testmode = 'yes' === $this->get_option( 'testmode' );
-		
+
 		// further check of SSL if you want
 		// add_action( 'admin_notices', array( $this, 'do_ssl_check' ) );
 
@@ -48,7 +48,43 @@ class wowp_iptwpg_ipaytotal extends WC_Payment_Gateway {
 		// Save settings
 		if ( is_admin() ) {
 			add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
-		}		
+		}
+	}
+
+	public function process_admin_options() {
+
+    parent::process_admin_options();
+
+
+		if (isset($this->settings['webhook'])) {
+			$enabled = $this->settings['webhook'] == 'yes' ? 1 : 0;
+			if ($enabled) {
+
+				include_once ABSPATH . '/wp-content/plugins/woocommerce/includes/admin/wc-admin-functions.php';
+				$pages = apply_filters(
+					'woocommerce_create_pages',
+					array(
+						'ipaytotal-webhook'      => array(
+							'name'    => _x( 'ipaytotal-webhook', 'Page slug', 'woocommerce' ),
+							'title'   => _x( 'iPayTotal Webhook', 'Page title', 'woocommerce' ),
+							'content' => '<!-- wp:shortcode -->[ipaytotal-webhook]<!-- /wp:shortcode -->',
+						),
+					)
+				);
+				foreach ( $pages as $key => $page ) {
+					wc_create_page( esc_sql( $page['name'] ), 'woocommerce_' . $key . '_page_id', $page['title'], $page['content'], ! empty( $page['parent'] ) ? wc_get_page_id( $page['parent'] ) : '' );
+				}
+			}
+			else {
+				global $wpdb;
+				$slug = 'ipaytotal-webhook';
+				$id = $wpdb->get_var( $wpdb->prepare( "SELECT ID FROM $wpdb->posts WHERE post_type='page' AND post_name = %s LIMIT 1;", $slug ) );
+				wp_delete_post($id, true);
+			}
+		}
+
+
+    //$this->test_select = $this->get_option('test_select');
 	}
 
 	// administration fields for specific Gateway
@@ -82,10 +118,17 @@ class wowp_iptwpg_ipaytotal extends WC_Payment_Gateway {
 	            'type'        => 'textarea',
 	            'desc_tip' => __( 'Payment method description that the customer will see on your checkout.', 'wp-ipaytotal-woocommerce' ),
 	            'default'     => __( 'Pay with your Mastercard or Visa card using iPayTotal payment processor', 'wp-ipaytotal-woocommerce' ),
-	        ),
-		);		
+	     ),
+			 'webhook' => array(
+ 	            'title'       => __( 'Enable / Disable Webhook', 'wp-ipaytotal-woocommerce' ),
+							'label'			=> __( 'Enable the webhook of iPayTotal', 'wp-ipaytotal-woocommerce' ),
+ 	            'type'        => 'checkbox',
+ 	            'desc_tip' => __( 'If enabled, you allow iPayTotal to update transactions should the details from the bank is available.', 'wp-ipaytotal-woocommerce' ),
+ 	            'default'     => 'no'
+ 	     ),
+		);
 	}
-	
+
 	// Response handled for payment gateway
 	public function process_payment( $order_id ) {
 		global $woocommerce;
@@ -95,9 +138,9 @@ class wowp_iptwpg_ipaytotal extends WC_Payment_Gateway {
 		$products = $customer_order->get_items();
 
 		$ipaytotal_card = new WOWP_IPTWPG_iPayTotal_API();
-                
+
 		$ipt_response_url = site_url('ipayment-callback');
-	
+
 		$billing_state = $customer_order->get_billing_state();
 		$billing_city = $customer_order->get_billing_city();
 		$zip = $customer_order->get_billing_postcode();
@@ -123,11 +166,17 @@ class wowp_iptwpg_ipaytotal extends WC_Payment_Gateway {
             'shipping_address'      => $customer_order->get_shipping_address_1(),
             'shipping_country'      => $customer_order->get_shipping_address_2(),
             'shipping_state'        => $customer_order->get_shipping_country(),
-            'shipping_city'         => $customer_order->get_shipping_state(), // if 
+            'shipping_city'         => $customer_order->get_shipping_state(), // if
             'shipping_zip'          => $customer_order->get_shipping_city(),
             'shipping_email'        => $customer_order->get_shipping_postcode(),
             'shipping_phone_no'     => $customer_order->get_billing_phone(),
         );
+				if (isset($this->webhook)) {
+					$enabled = $this->webhook == 'yes' ? true : false;
+					if ($enabled) {
+						$data['webhook_url'] = get_site_url() . '/ipaytotal-webhook';
+					}
+				}
 
 		// Decide which URL to post to
 		if ($this->ipt_test_mode == 'yes') {
@@ -135,26 +184,26 @@ class wowp_iptwpg_ipaytotal extends WC_Payment_Gateway {
 		} else {
 			$environment_url = "https://ipaytotal.solutions/api/hosted-pay/payment-request";
 		}
-		
 
-        $result = wp_remote_post( $environment_url, array( 
-            'method'    => 'POST', 
-            'body'      => json_encode( $data ), 
-            'timeout'   => 90, 
-            'sslverify' => true, 
-            'headers' => array( 'Content-Type' => 'application/json' ) 
+
+        $result = wp_remote_post( $environment_url, array(
+            'method'    => 'POST',
+            'body'      => json_encode( $data ),
+            'timeout'   => 90,
+            'sslverify' => true,
+            'headers' => array( 'Content-Type' => 'application/json' )
         ) );
 
 		if ( is_wp_error( $result ) ) {
 			throw new Exception( __( 'There is issue for connecting payment gateway. Sorry for the inconvenience.', 'wp-ipaytotal-woocommerce' ) );
 			if ( empty( $result['body'] ) ) {
-				throw new Exception( __( 'iPayTotal\'s Response was not get any data.', 'wp-ipaytotal-woocommerce' ) );	
+				throw new Exception( __( 'iPayTotal\'s Response was not get any data.', 'wp-ipaytotal-woocommerce' ) );
 			}
 		}
-		
+
 		// get body response while get not error
 		$response_body = $ipaytotal_card->get_response_body($result);
-		
+
 		if ( $response_body['status'] == 'success' ) {
 			$customer_order->update_status('on-hold', __( 'Redirecting to 3D secure page.', 'wp-ipaytotal-woocommerce' ));
 
@@ -167,9 +216,9 @@ class wowp_iptwpg_ipaytotal extends WC_Payment_Gateway {
 			$errorsMessage = "";
 			if(isset($response_body['errors']) && !empty($response_body['errors'])) {
 				$errors = $response_body['errors'];
-				
+
 				foreach( $errors as $key => $value ){
-					$errorsMessage .= "<br>". $value[0];	
+					$errorsMessage .= "<br>". $value[0];
 				}
 			} else {
 				$errorsMessage = $response_body['message'];
@@ -182,7 +231,7 @@ class wowp_iptwpg_ipaytotal extends WC_Payment_Gateway {
 			$customer_order->update_status('failed');
 		}
 	}
-	
+
 	// Validate fields
 	public function validate_fields()
 	{
